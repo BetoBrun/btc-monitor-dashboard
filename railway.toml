@@ -1,0 +1,24 @@
+# Railway deployment - FREE tier
+# Docs: https://docs.railway.app
+
+plugins:
+  - name: python
+
+build:
+  - command: pip install -r requirements.txt
+
+start:
+  - command: python dashboard_web.py
+
+healthCheck:
+  path: /health
+  port: 8080
+
+variables:
+  - TELEGRAM_TOKEN
+  - TELEGRAM_CHAT_ID
+
+scale:
+  min: 1
+  max: 1
+  auto: false

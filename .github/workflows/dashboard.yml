@@ -1,12 +1,12 @@
 name: BTC Monitor Dashboard
 
 on:
-  push:
-    branches: [main]
-  workflow_dispatch:
+  schedule:
+    - cron: "0 * * * *"  # A cada hora
+  workflow_dispatch:  # Pode rodar manualmente
 
 jobs:
-  deploy-dashboard:
+  update-dashboard:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -17,17 +17,42 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: pip install flask requests gunicorn
+        run: pip install flask requests gunicorn python-dotenv
 
       - name: Create .env file
         run: |
           echo "TELEGRAM_TOKEN=${{ secrets.TELEGRAM_TOKEN }}" > .env
           echo "TELEGRAM_CHAT_ID=${{ secrets.TELEGRAM_CHAT_ID }}" >> .env
 
-      - name: Run dashboard
+      - name: Start dashboard in background
         run: |
           nohup python dashboard_web.py > dashboard.log 2>&1 &
-          sleep 5
+          sleep 3
+
+      - name: Test endpoints
+        run: |
+          echo "=== Health Check ==="
           curl -s http://localhost:8080/health
           echo ""
+          echo ""
+          echo "=== API Status ==="
           curl -s http://localhost:8080/api/status
+          echo ""
+          echo ""
+          echo "=== Dashboard (first 50 lines) ==="
+          curl -s http://localhost:8080/ | head -50
+
+      - name: Show dashboard log
+        if: always()
+        run: |
+          echo "=== Dashboard Log ==="
+          cat dashboard.log 2>/dev/null || echo "No log yet"
+
+      - name: Upload dashboard screenshot
+        if: always()
+        run: |
+          echo "<details><summary>Dashboard Preview</summary>" >> $GITHUB_STEP_SUMMARY
+          echo '<pre>' >> $GITHUB_STEP_SUMMARY
+          curl -s http://localhost:8080/ 2>/dev/null | head -100 >> $GITHUB_STEP_SUMMARY || echo "Dashboard not available" >> $GITHUB_STEP_SUMMARY
+          echo '</pre>' >> $GITHUB_STEP_SUMMARY
+          echo "</details>" >> $GITHUB_STEP_SUMMARY

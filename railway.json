@@ -1,0 +1,16 @@
+# Railway configuration
+# https://railway.app
+
+[build.command]
+pip install -r requirements.txt
+
+[start.command]
+python dashboard_web.py
+
+[settings]
+healthcheckPath = /health
+port = 8080
+
+[variableDefinitions]
+TELEGRAM_TOKEN = ""
+TELEGRAM_CHAT_ID = ""

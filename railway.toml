@@ -2,15 +2,14 @@
   command = "pip install -r requirements.txt"
 
 [start]
-  command = "python dashboard_web.py"
+  command = "PORT=8080 python dashboard_web.py"
 
 [deployHealthcheck]
   path = "/health"
   port = 8080
+  interval = 10
+  timeout = 5
 
 [settings]
   port = 8080
-
-[environment]
-  TELEGRAM_TOKEN = ""
-  TELEGRAM_CHAT_ID = ""
+  healthcheck = true

@@ -24,13 +24,10 @@ jobs:
           echo "TELEGRAM_TOKEN=${{ secrets.TELEGRAM_TOKEN }}" > .env
           echo "TELEGRAM_CHAT_ID=${{ secrets.TELEGRAM_CHAT_ID }}" >> .env
 
-      - name: Run dashboard test
+      - name: Run dashboard
         run: |
           nohup python dashboard_web.py > dashboard.log 2>&1 &
-          sleep 10
+          sleep 5
           curl -s http://localhost:8080/health
-
-      - name: Show results
-        run: |
-          curl -s http://localhost:8080/ | head -30
-          cat dashboard.log 2>/dev/null || true
+          echo ""
+          curl -s http://localhost:8080/api/status

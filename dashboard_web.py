@@ -118,12 +118,12 @@ def get_24h_stats():
         return None
 
 
-def get_signal():
-    """Compute RSI from Hyperliquid candles."""
+def get_rsi(price: float) -> dict:
+    """Calculate RSI from Hyperliquid candles."""
     try:
         headers = {"Content-Type": "application/json"}
         end_ms = int(datetime.now().timestamp() * 1000)
-        start_ms = end_ms - 60 * 60 * 1000 * 48  # 48 hours
+        start_ms = end_ms - 60 * 60 * 1000 * 48
         
         payload = {
             "type": "candleSnapshot",
@@ -138,45 +138,36 @@ def get_signal():
         if r.status_code == 200:
             candles = r.json()
             if isinstance(candles, list) and len(candles) >= 14:
-                closes = [float(c.get("c", 0)) for c in candles if c.get("c")]
+                closes = [float(c.get("c", 0)) for c in candles[-50:] if c.get("c")]
                 if len(closes) >= 14:
-                    gains = []
-                    losses = []
+                    gains, losses = [], []
                     for i in range(1, len(closes)):
                         diff = closes[i] - closes[i-1]
                         gains.append(max(diff, 0))
                         losses.append(max(-diff, 0))
                     
-                    avg_gain = sum(gains) / min(14, len(gains))
-                    avg_loss = sum(losses) / min(14, len(losses))
+                    avg_gain = sum(gains[-14:]) / 14
+                    avg_loss = sum(losses[-14:]) / 14
                     rs = avg_gain / avg_loss if avg_loss > 0 else 100
                     rsi = 100 - (100 / (1 + rs))
                     
-                    price = closes[-1] if closes else None
-                    
                     if rsi < 30:
-                        action, strength, confidence = "BUY", "strong", min(90, 100 - rsi)
+                        action, strength = "BUY", "STRONG"
                     elif rsi > 70:
-                        action, strength, confidence = "SELL", "strong", min(90, rsi)
+                        action, strength = "SELL", "STRONG"
                     else:
-                        action, strength, confidence = "HOLD", "moderate", 50
+                        action, strength = "HOLD", "MODERATE"
                     
                     return {
-                        "signal": {
-                            "action": action,
-                            "strength": strength,
-                            "confidence": round(confiance, 1),
-                            "score": 2 if action == "BUY" else -2 if action == "SELL" else 0,
-                        },
-                        "indicators": {
-                            "price": price,
-                            "rsi": round(rsi, 1),
-                        }
+                        "action": action,
+                        "strength": strength,
+                        "rsi": round(rsi, 1),
+                        "price": price
                     }
     except Exception as e:
-        log.warning(f"Hyperliquid RSI error: {e}")
+        log.warning(f"RSI error: {e}")
     
-    return None
+    return {"action": "HOLD", "strength": "N/A", "rsi": 50, "price": price}
 
 
 def get_state():
@@ -337,13 +328,13 @@ HTML_TEMPLATE = """
             <div class="status-badge status-{{ status }}">{{ status.upper() }}</div>
         </div>
 
-        {% if signal_data and signal_data.signal %}
+        {% if rsi_data and rsi_data.rsi %}
         <div class="price-card" style="padding: 20px;">
-            <div style="font-size: 0.9em; color: #888;">SINAL RSI (1h)</div>
-            <div class="signal-badge signal-{{ signal_data.signal.action.lower() }}">
-                {{ signal_data.signal.action }} — {{ signal_data.signal.strength.upper() }}
+            <div style="font-size: 0.9em; color: #888;">RSI 14 (1h)</div>
+            <div class="signal-badge signal-{{ rsi_data.action.lower() }}">
+                {{ rsi_data.action }} — {{ rsi_data.strength }}
             </div>
-            <div class="signal-confidence">Confianca: {{ signal_data.signal.confidence }}%</div>
+            <div class="signal-confidence">RSI: {{ rsi_data.rsi }}</div>
         </div>
         {% endif %}
 
@@ -360,10 +351,10 @@ HTML_TEMPLATE = """
 
             <div class="card">
                 <h3>📈 Indicadores</h3>
-                {% if signal_data and signal_data.indicators %}
+                {% if rsi_data %}
                 <div class="indicator-row">
-                    <span class="indicator-name">RSI 14</span>
-                    <span class="indicator-value indicator-rsi" data-rsi="{{ signal_data.indicators.rsi }}">{{ signal_data.indicators.rsi }}</span>
+                    <span class="indicator-name">RSI 14 (1h)</span>
+                    <span class="indicator-value indicator-rsi">{{ rsi_data.rsi }}</span>
                 </div>
                 {% endif %}
                 <div class="indicator-row">
@@ -415,7 +406,7 @@ HTML_TEMPLATE = """
 def index():
     price = get_price()
     stats = get_24h_stats()
-    signal_data = get_signal()
+    rsi_data = get_rsi(price) if price else {"action": "HOLD", "strength": "N/A", "rsi": 50}
     status = price_status(price) if price else "neutral"
 
     price_color = "#00e676" if status == "bullish" else "#ff1744" if status == "bearish" else "#ffd600"
@@ -430,7 +421,6 @@ def index():
     ]
 
     logs = get_recent_logs(20)
-    rsi_value = signal_data.get("indicators", {}).get("rsi", 50) if signal_data else 50
 
     def is_near(price, level, tolerance=500):
         return price and abs(price - level) < tolerance
@@ -439,7 +429,7 @@ def index():
         HTML_TEMPLATE,
         price=price,
         stats=stats,
-        signal_data=signal_data,
+        rsi_data=rsi_data,
         status=status,
         price_color=price_color,
         change_color=change_color,
@@ -447,7 +437,6 @@ def index():
         alerts=alerts,
         logs=logs,
         is_near=is_near,
-        rsi_value=rsi_value,
         timestamp=datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
     )
 
@@ -456,7 +445,7 @@ def index():
 def api_status():
     price = get_price()
     stats = get_24h_stats()
-    signal_data = get_signal()
+    rsi_data = get_rsi(price) if price else {"action": "HOLD", "strength": "N/A", "rsi": 50}
     state = get_state()
     return jsonify({
         "price": price,
@@ -464,8 +453,8 @@ def api_status():
         "24h_change": stats["change"] if stats else None,
         "24h_high": stats["high"] if stats else None,
         "24h_low": stats["low"] if stats else None,
-        "signal": signal_data.get("signal") if signal_data else None,
-        "rsi": signal_data.get("indicators", {}).get("rsi") if signal_data else None,
+        "rsi": rsi_data.get("rsi"),
+        "signal": rsi_data.get("action"),
         "last_alerts": state.get("last_triggered", {}),
         "timestamp": datetime.now().isoformat(),
     })

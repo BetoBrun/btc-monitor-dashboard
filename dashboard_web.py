@@ -16,8 +16,9 @@ from dotenv import load_dotenv
 load_dotenv()
 
 app = Flask(__name__)
-logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
+
+INFO_URL = "https://api.hyperliquid.xyz/info"
 
 # Config
 SYMBOL = "BTCUSDT"
@@ -36,13 +37,69 @@ LEVELS = {
 
 
 def get_price():
+    """Fetch BTC price from Hyperliquid."""
+    try:
+        headers = {"Content-Type": "application/json"}
+        payload = {"type": "allMids"}
+        r = requests.post(INFO_URL, json=payload, headers=headers, timeout=15)
+        if r.status_code == 200:
+            data = r.json()
+            if isinstance(data, dict):
+                for key in ("BTC", "UBTC", "BTC/USDC"):
+                    if key in data:
+                        return float(data[key])
+    except Exception as e:
+        log.warning(f"Hyperliquid price error: {e}")
+    
+    # Fallback: Binance
     try:
         url = f"https://api.binance.com/api/v3/ticker/price?symbol={SYMBOL}"
-        r = requests.get(url, timeout=10)
-        return float(r.json()["price"])
+        headers = {"User-Agent": "Mozilla/5.0"}
+        r = requests.get(url, timeout=10, headers=headers)
+        if r.status_code == 200:
+            return float(r.json()["price"])
     except Exception as e:
-        log.error(f"Price error: {e}")
-        return None
+        log.warning(f"Binance fallback error: {e}")
+    
+    log.error("All price sources failed")
+    return None
+
+
+def get_24h_stats():
+    """Fetch 24h stats from Hyperliquid or Binance."""
+    try:
+        headers = {"Content-Type": "application/json"}
+        payload = {"type": "allMids"}
+        r = requests.post(INFO_URL, json=payload, headers=headers, timeout=15)
+        if r.status_code == 200:
+            price = get_price()
+            if price:
+                return {
+                    "change": 0.0,
+                    "high": price * 1.02,
+                    "low": price * 0.98,
+                    "volume": 0,
+                }
+    except Exception as e:
+        log.warning(f"Hyperliquid 24h error: {e}")
+    
+    # Fallback: Binance
+    try:
+        url = f"https://api.binance.com/api/v3/ticker/24hr?symbol={SYMBOL}"
+        headers = {"User-Agent": "Mozilla/5.0"}
+        r = requests.get(url, timeout=10, headers=headers)
+        if r.status_code == 200:
+            data = r.json()
+            return {
+                "change": float(data["priceChangePercent"]),
+                "high": float(data["highPrice"]),
+                "low": float(data["lowPrice"]),
+                "volume": float(data["quoteVolume"]),
+            }
+    except Exception as e:
+        log.warning(f"Binance 24h fallback error: {e}")
+    
+    return None
 
 
 def get_24h_stats():
@@ -62,66 +119,64 @@ def get_24h_stats():
 
 
 def get_signal():
-    """Fetch BTC signal from crypto-signal-api (free, no API key)."""
+    """Compute RSI from Hyperliquid candles."""
     try:
-        url = f"http://localhost:3100/api/v1/signal/{SYMBOL}?interval=1h"
-        r = requests.get(url, timeout=10)
-        if r.status_code == 200:
-            return r.json()
-    except Exception:
-        pass
-
-    # Fallback: compute basic signal from Binance data
-    try:
-        # Get RSI from Binance klines
-        klines_url = f"https://api.binance.com/api/v3/klines?symbol={SYMBOL}&interval=1h&limit=14"
-        r = requests.get(klines_url, timeout=10)
-        closes = [float(c[4]) for c in r.json()]
-
-        # Simple RSI
-        gains = []
-        losses = []
-        for i in range(1, len(closes)):
-            diff = closes[i] - closes[i-1]
-            gains.append(max(diff, 0))
-            losses.append(max(-diff, 0))
-
-        avg_gain = sum(gains) / 14
-        avg_loss = sum(losses) / 14
-        rs = avg_gain / avg_loss if avg_loss > 0 else 100
-        rsi = 100 - (100 / (1 + rs))
-
-        price = closes[-1]
-
-        # Determine signal
-        if rsi < 30:
-            action = "BUY"
-            strength = "strong"
-            confidence = min(90, 100 - rsi)
-        elif rsi > 70:
-            action = "SELL"
-            strength = "strong"
-            confidence = min(90, rsi)
-        else:
-            action = "HOLD"
-            strength = "moderate"
-            confidence = 50
-
-        return {
-            "signal": {
-                "action": action,
-                "strength": strength,
-                "confidence": round(confidence, 1),
-                "score": 2 if action == "BUY" else -2 if action == "SELL" else 0,
-            },
-            "indicators": {
-                "price": price,
-                "rsi": round(rsi, 1),
+        headers = {"Content-Type": "application/json"}
+        end_ms = int(datetime.now().timestamp() * 1000)
+        start_ms = end_ms - 60 * 60 * 1000 * 48  # 48 hours
+        
+        payload = {
+            "type": "candleSnapshot",
+            "req": {
+                "coin": "BTC",
+                "interval": "1h",
+                "startTime": start_ms,
+                "endTime": end_ms
             }
         }
+        r = requests.post(INFO_URL, json=payload, headers=headers, timeout=15)
+        if r.status_code == 200:
+            candles = r.json()
+            if isinstance(candles, list) and len(candles) >= 14:
+                closes = [float(c.get("c", 0)) for c in candles if c.get("c")]
+                if len(closes) >= 14:
+                    gains = []
+                    losses = []
+                    for i in range(1, len(closes)):
+                        diff = closes[i] - closes[i-1]
+                        gains.append(max(diff, 0))
+                        losses.append(max(-diff, 0))
+                    
+                    avg_gain = sum(gains) / min(14, len(gains))
+                    avg_loss = sum(losses) / min(14, len(losses))
+                    rs = avg_gain / avg_loss if avg_loss > 0 else 100
+                    rsi = 100 - (100 / (1 + rs))
+                    
+                    price = closes[-1] if closes else None
+                    
+                    if rsi < 30:
+                        action, strength, confidence = "BUY", "strong", min(90, 100 - rsi)
+                    elif rsi > 70:
+                        action, strength, confidence = "SELL", "strong", min(90, rsi)
+                    else:
+                        action, strength, confidence = "HOLD", "moderate", 50
+                    
+                    return {
+                        "signal": {
+                            "action": action,
+                            "strength": strength,
+                            "confidence": round(confiance, 1),
+                            "score": 2 if action == "BUY" else -2 if action == "SELL" else 0,
+                        },
+                        "indicators": {
+                            "price": price,
+                            "rsi": round(rsi, 1),
+                        }
+                    }
     except Exception as e:
-        log.error(f"Signal computation error: {e}")
-        return None
+        log.warning(f"Hyperliquid RSI error: {e}")
+    
+    return None
 
 
 def get_state():
